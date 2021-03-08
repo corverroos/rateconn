@@ -14,12 +14,12 @@ func Bps(bytesPerSec int) *rate.Limiter {
 
 // KBps is a convenience function returning a kilobytes per second rate limiter.
 func KBps(kiloBytesPerSec float64) *rate.Limiter {
-	return Bps(int(kiloBytesPerSec*1024))
+	return Bps(int(kiloBytesPerSec * 1024))
 }
 
 // MBps is a convenience function returning a megabytes per second rate limiter.
 func MBps(megaBytesPerSecond float64) *rate.Limiter {
-	return KBps(megaBytesPerSecond*1024)
+	return KBps(megaBytesPerSecond * 1024)
 }
 
 // NewConn returns a new rate limited network connection. The rate limiters need to be configured in bytes per second, see Bps.
@@ -38,7 +38,7 @@ type Conn struct {
 	ctx      context.Context
 }
 
-// Write writes data to the connection but blocks while it exceeds the rate limit.
+// Write writes data to the connection but blocks while it exceeds any of internal rate limits.
 func (c *Conn) Write(b []byte) (n int, err error) {
 	// Use minimum per second rate limit
 	var perSec int
@@ -48,8 +48,6 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 			perSec = temp
 		}
 	}
-
-
 
 	div := len(b) / perSec
 	mod := len(b) % perSec
