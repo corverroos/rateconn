@@ -42,7 +42,7 @@ func TestConns(t *testing.T) {
 		t.Run(test.Name, func(t *testing.T) {
 			t0 := time.Now()
 			err := run(test.TotalBytes, func(conn net.Conn) *Conn {
-				return NewConn(conn, Limiter(test.BytesPerSec))
+				return NewConn(conn, Bps(test.BytesPerSec))
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -59,14 +59,14 @@ func TestConns(t *testing.T) {
 }
 
 func TestPool(t *testing.T) {
-	pool := NewPool(Limiter(KB100))
+	pool := NewPool(Bps(KB100))
 
 	KB50 := KB10 * 5
 	t0 := time.Now()
 	for i := 0; i < 4; i++ {
 		// Individual connections should complete immediately, but pool delays the 2 of the 4.
 		err := run(KB50, func(conn net.Conn) *Conn {
-			return pool.NewConn(conn, Limiter(KB50))
+			return pool.NewConn(conn, Bps(KB50))
 		})
 		if err != nil {
 			t.Fatal(err)

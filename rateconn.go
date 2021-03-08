@@ -7,12 +7,22 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Limiter is a convenience function returning a bytes per second rate limiter.
-func Limiter(bytesPerSec int) *rate.Limiter {
+// Bps is a convenience function returning a bytes per second rate limiter.
+func Bps(bytesPerSec int) *rate.Limiter {
 	return rate.NewLimiter(rate.Limit(bytesPerSec), bytesPerSec)
 }
 
-// NewConn returns a new rate limited network connection. The rate limiters need to be configured in bytes per second, see Limiter.
+// KBps is a convenience function returning a kilobytes per second rate limiter.
+func KBps(kiloBytesPerSec float64) *rate.Limiter {
+	return Bps(int(kiloBytesPerSec*1024))
+}
+
+// MBps is a convenience function returning a megabytes per second rate limiter.
+func MBps(megaBytesPerSecond float64) *rate.Limiter {
+	return KBps(megaBytesPerSecond*1024)
+}
+
+// NewConn returns a new rate limited network connection. The rate limiters need to be configured in bytes per second, see Bps.
 func NewConn(conn net.Conn, limiters ...*rate.Limiter) *Conn {
 	return &Conn{
 		Conn:     conn,
@@ -38,6 +48,8 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 			perSec = temp
 		}
 	}
+
+
 
 	div := len(b) / perSec
 	mod := len(b) % perSec
