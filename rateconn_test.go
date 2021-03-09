@@ -2,25 +2,26 @@ package rateconn_test
 
 import (
 	"fmt"
-	"github.com/corverroos/rateconn"
 	"io"
 	"io/ioutil"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/corverroos/rateconn"
+
 	"golang.org/x/sync/errgroup"
 )
 
 const (
-	Inf = rateconn.Inf
+	Inf   = rateconn.Inf
 	KB10  = rateconn.KBps * 10
 	KB50  = rateconn.KBps * 50
 	KB100 = rateconn.KBps * 100
 
 	Sec0_5 = time.Millisecond * 500
-	Sec1 = time.Second
-	Sec2 = time.Second * 2
+	Sec1   = time.Second
+	Sec2   = time.Second * 2
 )
 
 // TODO(corver): Use a fake clock to speed up tests and make more robust.
@@ -70,9 +71,9 @@ func TestRateConn(t *testing.T) {
 			TxBytes:     KB50,
 			Threads:     4,
 			ExpDuration: Sec0_5, // Same as first since rx limit is sufficient
-		},{
+		}, {
 			Name:        "4 Tx 100KB Rx 100KB Pool 200 KB",
-			RxPoolLimit: KB100*2,
+			RxPoolLimit: KB100 * 2,
 			RxConnLimit: KB100,
 			TxLimit:     KB100,
 			TxBytes:     KB50,

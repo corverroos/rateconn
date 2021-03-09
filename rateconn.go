@@ -28,10 +28,10 @@ func (l Limit) Make() *rate.Limiter {
 }
 
 const (
-	Bps Limit = 1
+	Bps  Limit = 1
 	KBps Limit = 1 << 10
 	MBps Limit = 1 << 20
-	Inf Limit = math.MaxFloat64
+	Inf  Limit = math.MaxFloat64
 )
 
 // WithRXLimiter returns an option to add an additional rx limiter to a connection.
@@ -58,8 +58,8 @@ func WithCloseFunc(fn func()) func(*Conn) {
 // NewConn returns a new optional rate limited network connection.
 func NewConn(conn net.Conn, opts ...func(*Conn)) *Conn {
 	c := &Conn{
-		Conn:     conn,
-		ctx:      context.Background(),
+		Conn: conn,
+		ctx:  context.Background(),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -72,8 +72,8 @@ type Conn struct {
 	net.Conn
 	rxlimiters []*rate.Limiter
 	txlimiters []*rate.Limiter
-	closeFunc func()
-	ctx      context.Context
+	closeFunc  func()
+	ctx        context.Context
 }
 
 // Write writes data to the connection but blocks while it exceeds any of internal tx rate limits.
@@ -120,7 +120,6 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 	n += m
 	return n, err
 }
-
 
 // Read reads data from the connection but blocks while it exceeds any of internal rx rate limits.
 func (c *Conn) Read(b []byte) (int, error) {
@@ -169,26 +168,25 @@ func (c *Conn) Close() error {
 	return c.Conn.Close()
 }
 
-
 // NewPool returns a pool providing rate limited connections with an overall pool limit.
 // Both pool and connection limits are applied to rx and tx separately.
 func NewPool(poolLimit, connLimit Limit) *Pool {
 	return &Pool{
 		poolRXLimiter: poolLimit.Make(),
 		poolTXLimiter: poolLimit.Make(),
-		connLimit: connLimit,
-		connLimiters: make(map[int64]*rate.Limiter),
+		connLimit:     connLimit,
+		connLimiters:  make(map[int64]*rate.Limiter),
 	}
 }
 
 // Pool provides rate limited connections with an overall pool limit.
 // Connections can be added to pool via NewConn or Dial.
 type Pool struct {
-	mu sync.Mutex
+	mu            sync.Mutex
 	poolRXLimiter *rate.Limiter
 	poolTXLimiter *rate.Limiter
-	connLimit Limit
-	connLimiters map[int64]*rate.Limiter
+	connLimit     Limit
+	connLimiters  map[int64]*rate.Limiter
 }
 
 // NewConn returns a rate limited connection. It will also adhere to the overall pool and per connection limits.
@@ -212,8 +210,8 @@ func (p *Pool) NewConn(conn net.Conn) *Conn {
 		WithCloseFunc(func() {
 			p.mu.Lock()
 			defer p.mu.Unlock()
-			delete(p.connLimiters,rxIdx)
-			delete(p.connLimiters,txIdx)
+			delete(p.connLimiters, rxIdx)
+			delete(p.connLimiters, txIdx)
 		}),
 	)
 }
@@ -263,7 +261,7 @@ func Listen(network, address string, poolLimit, connLimit Limit) (*Listener, err
 
 	return &Listener{
 		Listener: l,
-		pool: NewPool(poolLimit, connLimit),
+		pool:     NewPool(poolLimit, connLimit),
 	}, nil
 }
 
@@ -275,7 +273,7 @@ type Listener struct {
 	pool *Pool
 }
 
-func (l *Listener) Accept() (net.Conn, error){
+func (l *Listener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
@@ -284,15 +282,15 @@ func (l *Listener) Accept() (net.Conn, error){
 	return l.pool.NewConn(c), nil
 }
 
-func (l *Listener) SetPoolLimit(limit Limit){
+func (l *Listener) SetPoolLimit(limit Limit) {
 	l.pool.SetPoolLimit(limit)
 }
 
-func (l *Listener) SetConnLimit(limit Limit){
+func (l *Listener) SetConnLimit(limit Limit) {
 	l.pool.SetConnLimit(limit)
 }
 
 var (
-	_ net.Conn = (*Conn)(nil)
+	_ net.Conn     = (*Conn)(nil)
 	_ net.Listener = (*Listener)(nil)
 )
