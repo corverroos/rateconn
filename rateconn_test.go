@@ -1,10 +1,11 @@
-package rateconn
+package rateconn_test
 
 import (
 	"fmt"
+	"github.com/corverroos/rateconn"
 	"io"
 	"io/ioutil"
-	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,43 +13,82 @@ import (
 )
 
 const (
-	KB100 = 1024 * 100
-	KB10  = 1024 * 10
+	Inf = rateconn.Inf
+	KB10  = rateconn.KBps * 10
+	KB50  = rateconn.KBps * 50
+	KB100 = rateconn.KBps * 100
+
+	Sec0_5 = time.Millisecond * 500
+	Sec1 = time.Second
+	Sec2 = time.Second * 2
 )
 
 // TODO(corver): Use a fake clock to speed up tests and make more robust.
 
-func TestConns(t *testing.T) {
+func TestRateConn(t *testing.T) {
 	tests := []struct {
 		Name        string
-		BytesPerSec int
-		TotalBytes  int
-		Duration    time.Duration
+		RxPoolLimit rateconn.Limit
+		RxConnLimit rateconn.Limit
+		TxLimit     rateconn.Limit
+		TxBytes     rateconn.Limit
+		Threads     int
+		ExpDuration time.Duration
 	}{
 		{
-			Name:        "100KB",
-			BytesPerSec: KB100,
-			TotalBytes:  KB100 * 3,
-			Duration:    time.Second * 2,
-		}, {
-			Name:        "10KB",
-			BytesPerSec: KB10,
-			TotalBytes:  KB10 * 1.5,
-			Duration:    time.Millisecond * 500,
+			Name:        "1 Tx 100KB Rx Inf",
+			RxPoolLimit: Inf,
+			RxConnLimit: Inf,
+			TxLimit:     KB100,
+			TxBytes:     KB50,
+			Threads:     1,
+			ExpDuration: Sec0_5,
+		},
+		{
+			Name:        "1 Tx Inf Rx 100KB",
+			RxPoolLimit: Inf,
+			RxConnLimit: KB100,
+			TxLimit:     Inf,
+			TxBytes:     KB50,
+			Threads:     1,
+			ExpDuration: Sec0_5, // Same as prev since tx limit just moved to rx.
+		},
+		{
+			Name:        "4 Tx 100KB Rx Inf",
+			RxPoolLimit: Inf,
+			RxConnLimit: Inf,
+			TxLimit:     KB100,
+			TxBytes:     KB50,
+			Threads:     4,
+			ExpDuration: Sec0_5, // Same as first since rx limit is inf
+		},
+		{
+			Name:        "4 Tx 100KB Rx 100KB",
+			RxPoolLimit: Inf,
+			RxConnLimit: KB100,
+			TxLimit:     KB100,
+			TxBytes:     KB50,
+			Threads:     4,
+			ExpDuration: Sec0_5, // Same as first since rx limit is sufficient
+		},{
+			Name:        "4 Tx 100KB Rx 100KB Pool 200 KB",
+			RxPoolLimit: KB100*2,
+			RxConnLimit: KB100,
+			TxLimit:     KB100,
+			TxBytes:     KB50,
+			Threads:     4,
+			ExpDuration: Sec1, // Double prev, due to rx pool limit
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
-			t0 := time.Now()
-			err := run(test.TotalBytes, func(conn net.Conn) *Conn {
-				return NewConn(conn, Bps(test.BytesPerSec))
-			})
+			dur, err := run(int(test.TxBytes), test.TxLimit, test.RxPoolLimit, test.RxConnLimit, test.Threads)
 			if err != nil {
 				t.Fatal(err)
 			}
-			actual := time.Since(t0).Seconds()
-			expected := test.Duration.Seconds()
+			actual := dur.Seconds()
+			expected := test.ExpDuration.Seconds()
 			if actual > (expected * 1.05) {
 				t.Fatalf("duration too long, expected=%f, actual=%f", expected, actual)
 			} else if actual < (expected * 0.95) {
@@ -58,72 +98,69 @@ func TestConns(t *testing.T) {
 	}
 }
 
-func TestPool(t *testing.T) {
-	pool := NewPool(Bps(KB100))
-
-	KB50 := KB10 * 5
-	t0 := time.Now()
-	for i := 0; i < 4; i++ {
-		// Individual connections should complete immediately, but pool delays the 2 of the 4.
-		err := run(KB50, func(conn net.Conn) *Conn {
-			return pool.NewConn(conn, Bps(KB50))
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	actual := time.Since(t0).Seconds()
-	expected := time.Second.Seconds()
-	if actual > (expected * 1.05) {
-		t.Fatalf("duration too long, expected=%f, actual=%f", expected, actual)
-	} else if actual < (expected * 0.95) {
-		t.Fatalf("duration too short, expected=%f, actual=%f", expected, actual)
-	}
-}
-
-func run(bytes int, get func(conn net.Conn) *Conn) error {
-	l, err := net.Listen("tcp", "localhost:0")
+func run(bytes int, txConnLimit, rxPoolLimit, rxConnLimit rateconn.Limit, threads int) (time.Duration, error) {
+	l, err := rateconn.Listen("tcp", "localhost:0", rxPoolLimit, rxConnLimit)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	defer l.Close()
 
-	var eg errgroup.Group
-	eg.Go(func() error {
-		t0 := time.Now()
-		conn, err := l.Accept()
-		if err != nil {
-			return err
-		}
+	var ioGroup errgroup.Group
+	var connectGroup sync.WaitGroup
+	durations := make(chan time.Duration, threads)
 
+	go func() {
 		for {
-			b, err := ioutil.ReadAll(conn)
-			if err != nil && err != io.EOF {
-				return err
+			conn, err := l.Accept()
+			if err != nil {
+				return
 			}
-			kbps := float64(len(b)) / 1024 / time.Since(t0).Seconds()
-			fmt.Printf("Read %d kB at %f kbps\n", len(b)/1024, kbps)
-			return nil
+			ioGroup.Go(func() error {
+				defer func(t0 time.Time) {
+					durations <- time.Since(t0)
+				}(time.Now())
+
+				b, err := ioutil.ReadAll(conn)
+				if err != nil && err != io.EOF {
+					return err
+				}
+				fmt.Printf("Read %d kB\n", len(b)/1024)
+				return nil
+			})
+			connectGroup.Done()
 		}
+	}()
 
-	})
-
-	eg.Go(func() error {
-		conn, err := net.Dial("tcp", l.Addr().String())
-		if err != nil {
-			return err
-		}
-		rconn := get(conn)
-
-		for i := 0; i < 100; i++ {
-			_, err := rconn.Write(make([]byte, bytes/100))
+	txPool := rateconn.NewPool(Inf, txConnLimit)
+	connectGroup.Add(threads)
+	for i := 0; i < threads; i++ {
+		ioGroup.Go(func() error {
+			conn, err := txPool.Dial("tcp", l.Addr().String())
 			if err != nil {
 				return err
 			}
+
+			for i := 0; i < 100; i++ {
+				_, err := conn.Write(make([]byte, bytes/100))
+				if err != nil {
+					return err
+				}
+			}
+
+			return conn.Close()
+		})
+	}
+	connectGroup.Wait()
+	if err := ioGroup.Wait(); err != nil {
+		return 0, err
+	}
+
+	close(durations)
+	var max time.Duration
+	for d := range durations {
+		if d > max {
+			max = d
 		}
-
-		return conn.Close()
-	})
-
-	return eg.Wait()
+	}
+	return max, nil
 }
