@@ -3,7 +3,7 @@
 //
 // Limit is a convenient way to define a rate.Limiter in bytes per second.
 // Conn is a basic rate limited network connection. It is configured using function options.
-// Pool groups multiple connections, applying an additional overall pool rate limit that applies to all active connections.
+// Clamp groups multiple connections, applying an additional overall clamp rate limit that applies to all active connections.
 // Listen is similar to net.Listen and applies a connection and pool limit all accepted connections.
 package rateconn
 
@@ -11,7 +11,6 @@ import (
 	"context"
 	"math"
 	"net"
-	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -55,8 +54,8 @@ func WithCloseFunc(fn func()) func(*Conn) {
 	}
 }
 
-// NewConn returns a new optional rate limited network connection.
-func NewConn(conn net.Conn, opts ...func(*Conn)) *Conn {
+// Wrap returns a optional rate limited network connection.
+func Wrap(conn net.Conn, opts ...func(*Conn)) *Conn {
 	c := &Conn{
 		Conn: conn,
 		ctx:  context.Background(),
@@ -168,129 +167,47 @@ func (c *Conn) Close() error {
 	return c.Conn.Close()
 }
 
-// NewPool returns a pool providing rate limited connections with an overall pool limit.
-// Both pool and connection limits are applied to rx and tx separately.
-func NewPool(poolLimit, connLimit Limit) *Pool {
-	return &Pool{
-		poolRXLimiter: poolLimit.Make(),
-		poolTXLimiter: poolLimit.Make(),
-		connLimit:     connLimit,
-		connLimiters:  make(map[int64]*rate.Limiter),
-	}
-}
-
-// Pool provides rate limited connections with an overall pool limit.
-// Connections can be added to pool via NewConn or Dial.
-type Pool struct {
-	mu            sync.Mutex
-	poolRXLimiter *rate.Limiter
-	poolTXLimiter *rate.Limiter
-	connLimit     Limit
-	connLimiters  map[int64]*rate.Limiter
-}
-
-// NewConn returns a rate limited connection. It will also adhere to the overall pool and per connection limits.
-func (p *Pool) NewConn(conn net.Conn) *Conn {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	rxIdx := time.Now().UnixNano()
-	txIdx := time.Now().UnixNano()
-	connRXLimiter := p.connLimit.Make()
-	connTXLimiter := p.connLimit.Make()
-
-	p.connLimiters[rxIdx] = connRXLimiter
-	p.connLimiters[txIdx] = connTXLimiter
-
-	return NewConn(conn,
-		WithRXLimiter(p.poolRXLimiter),
-		WithRXLimiter(connRXLimiter),
-		WithTXLimiter(p.poolTXLimiter),
-		WithTXLimiter(connTXLimiter),
-		WithCloseFunc(func() {
-			p.mu.Lock()
-			defer p.mu.Unlock()
-			delete(p.connLimiters, rxIdx)
-			delete(p.connLimiters, txIdx)
-		}),
-	)
-}
-
-// NewConn returns a rate limited connection. It will also adhere to the overall pool and per connection limits.
-func (p *Pool) Dial(network, address string) (*Conn, error) {
-	c, err := net.Dial(network, address)
-	if err != nil {
-		return nil, err
-	}
-
-	return p.NewConn(c), nil
-}
-
-// SetPoolLimit sets a new overall pool rate limit.
-func (p *Pool) SetPoolLimit(limit Limit) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	limiter := limit.Make()
-	p.poolTXLimiter.SetLimit(limiter.Limit())
-	p.poolTXLimiter.SetBurst(limiter.Burst())
-	p.poolRXLimiter.SetLimit(limiter.Limit())
-	p.poolRXLimiter.SetBurst(limiter.Burst())
-}
-
-// SetConnLimit sets a new per connection rate limit and a new rate limit for all active connections.
-func (p *Pool) SetConnLimit(limit Limit) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.connLimit = limit
-
-	limiter := limit.Make()
-	for _, connLimiter := range p.connLimiters {
-		connLimiter.SetLimit(limiter.Limit())
-		connLimiter.SetBurst(limiter.Burst())
-	}
-}
-
-// Listen returns a Listener for the provided network and address and rate limits.
-func Listen(network, address string, poolLimit, connLimit Limit) (*Listener, error) {
+// Listen returns a listener that accepts optional rate limited network connections.
+func Listen(network, address string, opts ...func(*Conn)) (net.Listener, error) {
 	l, err := net.Listen(network, address)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Listener{
+	return &listener{
 		Listener: l,
-		pool:     NewPool(poolLimit, connLimit),
+		wrapFunc: func(conn net.Conn) *Conn {
+			return Wrap(conn, opts...)
+		},
 	}, nil
 }
 
-// Listener wraps net.Listener and Pool and returns rate limited connections on Accept.
-// It supports an overall pool rate limit for all active connections
-// and a per connection rate limit for all accepted connections.
-type Listener struct {
+// listener wraps net.Listener and returns rate limited connections on Accept.
+type listener struct {
 	net.Listener
-	pool *Pool
+	wrapFunc func(conn net.Conn) *Conn
 }
 
-func (l *Listener) Accept() (net.Conn, error) {
+func (l *listener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
 
-	return l.pool.NewConn(c), nil
+	return l.wrapFunc(c), nil
 }
 
-func (l *Listener) SetPoolLimit(limit Limit) {
-	l.pool.SetPoolLimit(limit)
-}
+// Dial returns a rate limited connection. It will adhere to the overall clamp and per connection limits.
+func Dial(network, address string, opts ...func(*Conn)) (*Conn, error) {
+	conn, err := net.Dial(network, address)
+	if err != nil {
+		return nil, err
+	}
 
-func (l *Listener) SetConnLimit(limit Limit) {
-	l.pool.SetConnLimit(limit)
+	return Wrap(conn, opts...), nil
 }
 
 var (
 	_ net.Conn     = (*Conn)(nil)
-	_ net.Listener = (*Listener)(nil)
+	_ net.Listener = (*listener)(nil)
 )

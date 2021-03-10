@@ -29,7 +29,7 @@ const (
 func TestRateConn(t *testing.T) {
 	tests := []struct {
 		Name        string
-		RxPoolLimit rateconn.Limit
+		RxClampLimit rateconn.Limit
 		RxConnLimit rateconn.Limit
 		TxLimit     rateconn.Limit
 		TxBytes     rateconn.Limit
@@ -38,7 +38,7 @@ func TestRateConn(t *testing.T) {
 	}{
 		{
 			Name:        "1 Tx 100KB Rx Inf",
-			RxPoolLimit: Inf,
+			RxClampLimit: Inf,
 			RxConnLimit: Inf,
 			TxLimit:     KB100,
 			TxBytes:     KB50,
@@ -47,7 +47,7 @@ func TestRateConn(t *testing.T) {
 		},
 		{
 			Name:        "1 Tx Inf Rx 100KB",
-			RxPoolLimit: Inf,
+			RxClampLimit: Inf,
 			RxConnLimit: KB100,
 			TxLimit:     Inf,
 			TxBytes:     KB50,
@@ -56,7 +56,7 @@ func TestRateConn(t *testing.T) {
 		},
 		{
 			Name:        "4 Tx 100KB Rx Inf",
-			RxPoolLimit: Inf,
+			RxClampLimit: Inf,
 			RxConnLimit: Inf,
 			TxLimit:     KB100,
 			TxBytes:     KB50,
@@ -65,26 +65,26 @@ func TestRateConn(t *testing.T) {
 		},
 		{
 			Name:        "4 Tx 100KB Rx 100KB",
-			RxPoolLimit: Inf,
+			RxClampLimit: Inf,
 			RxConnLimit: KB100,
 			TxLimit:     KB100,
 			TxBytes:     KB50,
 			Threads:     4,
 			ExpDuration: Sec0_5, // Same as first since rx limit is sufficient
 		}, {
-			Name:        "4 Tx 100KB Rx 100KB Pool 200 KB",
-			RxPoolLimit: KB100 * 2,
+			Name:        "4 Tx 100KB Rx 100KB Clamp 200 KB",
+			RxClampLimit: KB100 * 2,
 			RxConnLimit: KB100,
 			TxLimit:     KB100,
 			TxBytes:     KB50,
 			Threads:     4,
-			ExpDuration: Sec1, // Double prev, due to rx pool limit
+			ExpDuration: Sec1, // Double prev, due to rx clamp limit
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
-			dur, err := run(int(test.TxBytes), test.TxLimit, test.RxPoolLimit, test.RxConnLimit, test.Threads)
+			dur, err := run(int(test.TxBytes), test.TxLimit, test.RxClampLimit, test.RxConnLimit, test.Threads)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,8 +99,9 @@ func TestRateConn(t *testing.T) {
 	}
 }
 
-func run(bytes int, txConnLimit, rxPoolLimit, rxConnLimit rateconn.Limit, threads int) (time.Duration, error) {
-	l, err := rateconn.Listen("tcp", "localhost:0", rxPoolLimit, rxConnLimit)
+func run(bytes int, txConnLimit, rxClampLimit, rxConnLimit rateconn.Limit, threads int) (time.Duration, error) {
+	rxClamp := rateconn.NewClamp(rxClampLimit, rxConnLimit)
+	l, err := rxClamp.Listen("tcp", "localhost:0")
 	if err != nil {
 		return 0, err
 	}
@@ -132,11 +133,11 @@ func run(bytes int, txConnLimit, rxPoolLimit, rxConnLimit rateconn.Limit, thread
 		}
 	}()
 
-	txPool := rateconn.NewPool(Inf, txConnLimit)
+	txClamp := rateconn.NewClamp(Inf, txConnLimit)
 	connectGroup.Add(threads)
 	for i := 0; i < threads; i++ {
 		ioGroup.Go(func() error {
-			conn, err := txPool.Dial("tcp", l.Addr().String())
+			conn, err := txClamp.Dial("tcp", l.Addr().String())
 			if err != nil {
 				return err
 			}
