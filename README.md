@@ -3,7 +3,7 @@
 rateconn is a Golang library providing rate limited network connections. 
 It wraps `net.Conn` and applies rate limiting using [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate).
 
-```
+```go
 // Create a clamp with overall limit of 1MB/s and per connection limit of 50KB/s
 clamp := rateconn.Clamp(rateconn.MBps, rateconn.KBps*50)
 
@@ -37,3 +37,4 @@ for {
 ### TODO
 - Figure out a nice API for defining different `Clamp` rx and tx limits.
 - Align single connection configuration and clamp configuration.
+- Use a fake clock for deterministic and more performant testing.
